@@ -2937,33 +2937,38 @@ if ~utilJarInPath
     end
     if ~isempty(path) && exist(path, 'file') == 2
         javaaddpath(path);
+        utilJarInPath = true;
     else
-        errordlg('Cannot automatically locate an OMEuiUtils JAR file');
+        errordlg(['Cannot automatically locate an OMEuiUtils JAR file' char(10)...
+            'Please download from https://dl.bintray.com/joshmoore/maven/ome/OMEuiUtils' char(10)...
+            'and place in the OMEuiUtils sub directory.']);
     end
 end
  
-logon = OMERO_logon();
- 
-try
-    port = logon{2};
-    if ischar(port)
-        port = str2num(port); 
+
+if utilJarInPath
+    logon = OMERO_logon();
+    
+    try
+        port = logon{2};
+        if ischar(port)
+            port = str2num(port);
+        end
+        client = loadOmero(logon{1},port);
+        session = client.createSession(logon{3},logon{4});
+    catch err
+        errordlg('Logon failed!');
+    end   % end catch
+    
+    if ~isempty(session)
+        client.enableKeepAlive(60); % Calls session.keepAlive() every 60 seconds
+        handles.session = session;
+        handles.client = client;
+        handles.userid = session.getAdminService().getEventContext().userId;
+        set(handles.mOMERO_Import,'Enable','on');
+        guidata(hObject,handles);
     end
-    client = loadOmero(logon{1},port);
-    session = client.createSession(logon{3},logon{4});
-catch err
-    errordlg('Logon failed!');
-end   % end catch
- 
-if ~isempty(session)
-    client.enableKeepAlive(60); % Calls session.keepAlive() every 60 seconds
-    handles.session = session;
-    handles.client = client;
-    handles.userid = session.getAdminService().getEventContext().userId; 
-    set(handles.mOMERO_Import,'Enable','on');
-    guidata(hObject,handles);
 end
- 
  
  
  
@@ -3028,7 +3033,8 @@ if ~isempty(dataset)
     
     workspacename = 'base';
     
-    nBlocks = floor(totalRows./nRows) + 1;
+    %nBlocks = floor(totalRows./nRows) + 1;
+    nBlocks = 20;
     % pre-allocate arrays
     frame = zeros(nBlocks * nRows,1);
     x = zeros(nBlocks * nRows,1);
