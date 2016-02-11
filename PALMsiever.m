@@ -2978,131 +2978,111 @@ function mOMERO_Import_Callback(hObject, eventdata, handles)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
  
-chooser = OMEuiUtils.OMEROImageChooser(handles.client, handles.userid, int32(1));
-dataset = chooser.getSelectedDataset();
+chooser = OMEuiUtils.OMEROImageChooser(handles.client, handles.userid, int32(6));
+originalFile = chooser.getSelectedFile();
 clear chooser;
-if ~isempty(dataset)
-    
-    session = handles.session;
-    annotationList = getDatasetFileAnnotations(session,dataset,'owner', -1);
-    
-    if isempty(annotationList)                
-        return;
-    end
-    
-    n = 1;
-    for a=1:length(annotationList)
-        name = char(annotationList(a).getFile().getName().getValue());
-        if strfind(name,'.h5')
-            names{n} = name;
-            h5List(n) = annotationList(a);
-            n = n + 1;
-        end
-    end
-    
-    if isempty(names)
-        return;
-    end
-    
-    if length(names) > 0
-        [s,v] = listdlg('PromptString','Select an annotation:',...
-                'SelectionMode','single',...
-                'ListString',names);
-    end
-            
-    originalFile = h5List(s).getFile();
-    filename = char(originalFile.getName().getValue())
-    
-    table = session.sharedResources().openTable(originalFile)
-    
-    %table = entryUnencrypted.sharedResources().openTable(originalFile);
-    %table = resources.openTable(originalFile);
-    
- 
-    % read 1st three columns initially (frame,x,y)
-    % full-list is:
-    % frame,x,y,id,intensity,precision,bkgstd (?!), sigma,offset
-    
-    nCols = 5;
-    colSubset = 0:nCols-1;
-    
-    totalRows = table.getNumberOfRows();
-    
-    % load 4096 points at a time
-    nRows = 4096;
-    
-    workspacename = 'base';
-    
-    %nBlocks = floor(totalRows./nRows) + 1;
-    nBlocks = 20;
-    % pre-allocate arrays
-    frame = zeros(nBlocks * nRows,1);
-    x = zeros(nBlocks * nRows,1);
-    y = zeros(nBlocks * nRows,1);
-    int = zeros(nBlocks * nRows,1);
-    
-    h = waitbar(0,'Importing data...');
-    
-    for block = 0:nBlocks -1 
-        
-        waitbar(block./(nBlocks-1));
-        
-        sstart = block * nRows;
-        eend = sstart + (nRows -1);
-        
-        if eend > totalRows -1
-            eend = totalRows -1
-        end
-     
-        rowSubset = sstart:eend;
-        data = table.slice(colSubset, rowSubset);
-        cols = data.columns;
-        
-        % convrt to matlab numbering
-        sstart = sstart + 1;
-        eend = eend + 1;
-    
-        frame(sstart:eend) = double(cols(1).values);
-        x(sstart:eend) = double(cols(2).values);
-        y(sstart:eend) = double(cols(3).values);
-        int(sstart:eend) = double(cols(5).values);
-        
-        waitbar(block./(nBlocks-1),h);
-        
-    end
-        
-    close(h);
-    
-    table.close();
-    
-    assignin(workspacename,'frame', frame);
-    assignin(workspacename,'x', x);
-    assignin(workspacename,'y', y);
-    assignin(workspacename,'intensity', int);
-    watch_on
-    
-    varAssignment={{'frame','frame'},{'x','x'},{'y','y'} };
-    
-    nEl = evalin('base',['numel(',varAssignment{1}{2},')']);
-    handles.settings.N = nEl;
-    set(handles.tFilename,'String',filename);
-   guidata(handles.output, handles);
-   reloadData(handles);
-   setPSVar(handles,varAssignment);
-   handles=guidata(handles.output);
-   reloadData(handles);
-   handles=guidata(handles.output);
-   redraw(handles);
-   handles=guidata(handles.output);
-   autoMin(handles);
-   handles=guidata(handles.output);
-   autoMax(handles);
-   handles=guidata(handles.output);
-   redraw(handles);
-   
-   watch_off
- 
-   
-        
+
+if isempty(originalFile)
+    errordlg('No File selected','File Error');
+    return;
 end
 
+filename = char(originalFile.getName().getValue());
+
+if isempty(strfind(filename,'.h5'))
+    errordlg('Not a valid OMERO.table','Error');
+    return;
+end
+        
+session = handles.session;
+
+table = session.sharedResources().openTable(originalFile);
+
+%table = entryUnencrypted.sharedResources().openTable(originalFile);
+%table = resources.openTable(originalFile);
+
+% read 1st three columns initially (frame,x,y)
+% full-list is:
+% frame,x,y,id,intensity,precision,bkgstd (?!), sigma,offset
+
+nCols = 5;
+colSubset = 0:nCols-1;
+
+totalRows = table.getNumberOfRows();
+
+% load 4096 points at a time
+nRows = 4096;
+
+workspacename = 'base';
+
+%nBlocks = floor(totalRows./nRows) + 1;
+nBlocks = 40;
+% pre-allocate arrays
+frame = zeros(nBlocks * nRows,1);
+x = zeros(nBlocks * nRows,1);
+y = zeros(nBlocks * nRows,1);
+int = zeros(nBlocks * nRows,1);
+
+h = waitbar(0,'Importing data...');
+
+for block = 0:nBlocks -1
+    
+    waitbar(block./(nBlocks-1));
+    
+    sstart = block * nRows;
+    eend = sstart + (nRows -1);
+    
+    if eend > totalRows -1
+        eend = totalRows -1
+    end
+    
+    rowSubset = sstart:eend;
+    data = table.slice(colSubset, rowSubset);
+    cols = data.columns;
+    
+    % convrt to matlab numbering
+    sstart = sstart + 1;
+    eend = eend + 1;
+    
+    frame(sstart:eend) = double(cols(1).values);
+    x(sstart:eend) = double(cols(2).values);
+    y(sstart:eend) = double(cols(3).values);
+    int(sstart:eend) = double(cols(5).values);
+    
+    waitbar(block./(nBlocks-1),h);
+    
+end
+
+close(h);
+
+table.close();
+
+assignin(workspacename,'frame', frame);
+assignin(workspacename,'x', x);
+assignin(workspacename,'y', y);
+assignin(workspacename,'intensity', int);
+watch_on
+
+varAssignment={{'frame','frame'},{'x','x'},{'y','y'} };
+
+nEl = evalin('base',['numel(',varAssignment{1}{2},')']);
+handles.settings.N = nEl;
+set(handles.tFilename,'String',filename);
+guidata(handles.output, handles);
+reloadData(handles);
+setPSVar(handles,varAssignment);
+handles=guidata(handles.output);
+reloadData(handles);
+handles=guidata(handles.output);
+redraw(handles);
+handles=guidata(handles.output);
+autoMin(handles);
+handles=guidata(handles.output);
+autoMax(handles);
+handles=guidata(handles.output);
+redraw(handles);
+
+watch_off
+
+   
+ 
