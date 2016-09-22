@@ -35,7 +35,7 @@ if ~isappdata(0,'ps_initialized') || ~getappdata(0,'ps_initialized')
     evalin('base','palmsiever_setup');
 end
 
-% Last Modified by GUIDE v2.5 12-Aug-2014 16:18:39
+% Last Modified by GUIDE v2.5 27-Aug-2015 18:46:40
 
 % Begin initialization code - DO NOT EDIT
 gui_Singleton = 1;
@@ -136,6 +136,11 @@ else
     handles.settings.sigmax='Dummy_sigma_X';
     handles.settings.sigmay='Dummy_sigma_Y';
     handles.settings.N=size(X,1);
+    
+    % OMERO session details
+    handles.session = [];
+    handles.client = [];
+    handles.userid = [];
 end
 guidata(handles.output, handles);
 handles=reloadData(handles);
@@ -563,7 +568,7 @@ switch get(handles.pShow,'Value')
         setappdata(0,'KDE',{X,Y,density'})
     case 6 % Histogram 3D Hue Opacity
         n=linspace(minX,maxX,res); m=linspace(minY,maxY,res);
-        a = .5; b=1;
+        a = .05; b=1;
         rgb = plotZ_fast(handles,res,subset,XPosition,YPosition,ZPosition,minZ,maxZ,minX,maxX,minY,maxY,gamma,minC,maxC,a,b);%simplified version without jittering
         
         imagesc(n,m,rgb);
@@ -2467,6 +2472,13 @@ function figure1_CloseRequestFcn(hObject, eventdata, handles)
 
 % Hint: delete(hObject) closes the figure
 
+if isfield(handles,'client')
+    if ~isempty(handles.client)
+        disp('Closing OMERO session');
+        handles.client.closeSession();
+    end
+end
+
 res = questdlg('Would you like to save your work before closing?','Save');
 
 if strcmp(res,'Yes')
@@ -2607,46 +2619,64 @@ rgb(rgb>1)=1;
 
 
 function rgb = plotZ_fast(handles,res,subset,XPosition,YPosition,ZPosition,minZ,maxZ,minX,maxX,minY,maxY,gamma,minC,maxC,a,b)
-nz = 32;
-RGB_SCALE_FACTOR= 10;
+nz = res/8;
 
-
-pxx=(maxX-minX)/res; pxy=(maxY-minY)/res; pxz=(maxZ-minZ)/res;
+pxx=(maxX-minX)/res; pxy=(maxY-minY)/res; pxz=(maxZ-minZ)/nz;
 pxVol=pxx * pxy * pxz;
 
-RR = [round((res-1)*[...
+RR = [ceil((res-1)*[...
     (XPosition(subset)-minX)/(maxX-minX) ...
     (YPosition(subset)-minY)/(maxY-minY) ])+1 ...
-      round(nz*(ZPosition(subset)-minZ)/(maxZ-minZ))];
+      ceil(nz*(ZPosition(subset)-minZ)/(maxZ-minZ))];
+RR(RR==0)=1;
 RRok = all(RR(:,1:2)<=res,2) & all(RR>=1,2) & RR(:,3)<=nz;
 
 density = accumarray(RR(RRok,[2 1 3]),1,[res,res,nz])/pxVol;
 
 sigma = str2double(get(handles.sigma,'String'));
 sPix = sigma/pxx;
-gWindow = ceil(5*sPix);
-gKern = fspecial('gaussian',gWindow, sPix);
+%gWindow = ceil(5*sPix);
+%gKern = fspecial('gaussian',gWindow, sPix);
 dMax = max(density(:));
 density = density/dMax;
-for ii = 1:size(density,3)
-  density(:,:,ii) = imfilter(density(:,:,ii),gKern,'replicate');
-end
+%for ii = 1:size(density,3)
+%  density(:,:,ii) = imfilter(density(:,:,ii),gKern,'replicate');
+%end
+density=double(gaussf(density,sigma./[pxx pxy pxz]));
 
 % ADJUST GAMMA HERE
 density(density<0)=0;
 density = gammaAdjust(density,gamma);
 rgbc = hsv(round(nz*3/2));
 rgbc = rgbc(1:nz,:);
-rgb = zeros(size(density,2),size(density,1),3);
-for i=1:size(density,3)
-    D = squeeze(density(:,:,i));
-    for c=1:3
-        rgb(:,:,c) = rgb(:,:,c).*(1-a*D) + b*rgbc(i,c).*D;
-    end
-end
-%keyboard
+%rgb = zeros(size(density,2),size(density,1),3);
 
-rgb = (rgb/max(rgb(:)) - minC) / (maxC-minC)/RGB_SCALE_FACTOR;
+Z = reshape(kron(1:size(density,3),ones(size(density,1),size(density,2))),size(density));
+
+%att = cumsum(flip(density./repmat(sum(density,3),1,1,size(density,3)),3),3);
+att = 1+sum(density(:))*a*cumsum(density,3);
+att(isnan(att))=Inf;
+
+rs = reshape(rgbc(Z,1),size(Z));
+gs = reshape(rgbc(Z,2),size(Z));
+bs = reshape(rgbc(Z,3),size(Z));
+
+rgb = cat(3,sum(density.* rs./att,3),sum(density.* gs./att,3),sum(density.* bs./att,3));
+
+% alphO = zeros(size(density,2),size(density,1));
+% for i=1:size(density,3)
+%     D = squeeze(density(:,:,i));    
+%     alphA = a*alphO;
+%     alphB = b*D;
+%     for c=1:3
+%         Ca = rgb(:,:,c);
+%         Cb = rgbc(i,c);
+%         rgb(:,:,c) = alphA.*Ca+(1-alphA).*alphB.*Cb;
+%     end
+%     alphO = 1-(1-alphO).*(1-D);
+% end
+
+rgb = (rgb/max(rgb(:))*max(density(:)) - minC) / (maxC-minC);
 
 rgb(rgb<0)=0; 
 rgb(rgb>1)=1;
@@ -2882,3 +2912,210 @@ function edit15_CreateFcn(hObject, eventdata, handles)
 if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
     set(hObject,'BackgroundColor','white');
 end
+
+
+% --------------------------------------------------------------------
+function mOMERO_Callback(hObject, eventdata, handles)
+% hObject    handle to mOMERO (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+
+% --------------------------------------------------------------------
+function mOMERO_Logon_Callback(hObject, eventdata, handles)
+% hObject    handle to mOMERO_Logon (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+ 
+ 
+addpath('OMERO.matlab');
+addpath('OMEuiUtils');
+ 
+loadOmero();
+ 
+% find paths to OMEuiUtils.jar and ini4j.jar - approach copied from
+% bfCheckJavaPath
+
+
+session = [];
+ 
+% first check they aren't already in the dynamic path
+jPath = javaclasspath('-dynamic');
+utilJarInPath = false;
+for i = 1:length(jPath)
+    if strfind(jPath{i},'OMEuiUtils.jar');
+        utilJarInPath = true;
+    end
+    
+end
+ 
+if ~utilJarInPath
+    path = which('OMEuiUtils.jar');
+    if isempty(path)
+        path = fullfile(fileparts(mfilename('fullpath')), 'OMEuiUtils.jar');
+    end
+    if ~isempty(path) && exist(path, 'file') == 2
+        javaaddpath(path);
+    else
+        errordlg('Cannot automatically locate an OMEuiUtils JAR file');
+    end
+end
+ 
+logon = OMERO_logon();
+ 
+try
+    port = logon{2};
+    if ischar(port)
+        port = str2num(port); 
+    end
+    client = loadOmero(logon{1},port);
+    session = client.createSession(logon{3},logon{4});
+catch err
+    errordlg('Logon failed!');
+end   % end catch
+ 
+if ~isempty(session)
+    client.enableKeepAlive(60); % Calls session.keepAlive() every 60 seconds
+    handles.session = session;
+    handles.client = client;
+    handles.userid = session.getAdminService().getEventContext().userId; 
+    set(handles.mOMERO_Import,'Enable','on');
+    guidata(hObject,handles);
+end
+ 
+ 
+ 
+ 
+% --------------------------------------------------------------------
+function mOMERO_Import_Callback(hObject, eventdata, handles)
+% hObject    handle to mOMERO_Import (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+ 
+chooser = OMEuiUtils.OMEROImageChooser(handles.client, handles.userid, int32(1));
+dataset = chooser.getSelectedDataset();
+clear chooser;
+if ~isempty(dataset)
+    
+    session = handles.session;
+    annotationList = getDatasetFileAnnotations(session,dataset,'owner', -1);
+    
+    if isempty(annotationList)                
+        return;
+    end
+    
+    n = 1;
+    for a=1:length(annotationList)
+        name = char(annotationList(a).getFile().getName().getValue());
+        if strfind(name,'.h5')
+            names{n} = name;
+            h5List(n) = annotationList(a);
+            n = n + 1;
+        end
+    end
+    
+    if isempty(names)
+        return;
+    end
+    
+    if length(names) > 0
+        [s,v] = listdlg('PromptString','Select an annotation:',...
+                'SelectionMode','single',...
+                'ListString',names);
+    end
+            
+    originalFile = h5List(s).getFile();
+    filename = char(originalFile.getName().getValue())
+    
+    table = session.sharedResources().openTable(originalFile)
+    
+    %table = entryUnencrypted.sharedResources().openTable(originalFile);
+    %table = resources.openTable(originalFile);
+    
+ 
+    % read 1st three columns initially (frame,x,y)
+    % full-list is:
+    % frame,x,y,id,intensity,precision,bkgstd (?!), sigma,offset
+    
+    nCols = 5;
+    colSubset = 0:nCols-1;
+    
+    totalRows = table.getNumberOfRows();
+    
+    % load 4096 points at a time
+    nRows = 4096;
+    
+    workspacename = 'base';
+    
+    nBlocks = floor(totalRows./nRows) + 1;
+    % pre-allocate arrays
+    frame = zeros(nBlocks * nRows,1);
+    x = zeros(nBlocks * nRows,1);
+    y = zeros(nBlocks * nRows,1);
+    int = zeros(nBlocks * nRows,1);
+    
+    h = waitbar(0,'Importing data...');
+    
+    for block = 0:nBlocks -1 
+        
+        waitbar(block./(nBlocks-1));
+        
+        sstart = block * nRows;
+        eend = sstart + (nRows -1);
+        
+        if eend > totalRows -1
+            eend = totalRows -1
+        end
+     
+        rowSubset = sstart:eend;
+        data = table.slice(colSubset, rowSubset);
+        cols = data.columns;
+        
+        % convrt to matlab numbering
+        sstart = sstart + 1;
+        eend = eend + 1;
+    
+        frame(sstart:eend) = double(cols(1).values);
+        x(sstart:eend) = double(cols(2).values);
+        y(sstart:eend) = double(cols(3).values);
+        int(sstart:eend) = double(cols(5).values);
+        
+        waitbar(block./(nBlocks-1),h);
+        
+    end
+        
+    close(h);
+    
+    table.close();
+    
+    assignin(workspacename,'frame', frame);
+    assignin(workspacename,'x', x);
+    assignin(workspacename,'y', y);
+    assignin(workspacename,'intensity', int);
+    watch_on
+    
+    varAssignment={{'frame','frame'},{'x','x'},{'y','y'} };
+    
+    nEl = evalin('base',['numel(',varAssignment{1}{2},')']);
+    handles.settings.N = nEl;
+    set(handles.tFilename,'String',filename);
+   guidata(handles.output, handles);
+   reloadData(handles);
+   setPSVar(handles,varAssignment);
+   handles=guidata(handles.output);
+   reloadData(handles);
+   handles=guidata(handles.output);
+   redraw(handles);
+   handles=guidata(handles.output);
+   autoMin(handles);
+   handles=guidata(handles.output);
+   autoMax(handles);
+   handles=guidata(handles.output);
+   redraw(handles);
+   
+   watch_off
+ 
+   
+        
+end
+
