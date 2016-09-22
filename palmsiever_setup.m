@@ -5,6 +5,7 @@
 % Licence:  GPL-v.3
 
 usediplib = ~isdeployed;
+usediplib = false;
 
 % Find out where we are
 palm_siever = fileparts(which('palmsiever_setup'));
